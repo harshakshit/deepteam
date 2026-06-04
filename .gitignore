@@ -174,3 +174,7 @@ secrets
 # Mac OS system files
 **/.DS_Store
 
+# local HF red-team test scripts (endpoint creds / not for the repo)
+hf_adv_model_test.py
+hf_system_recon_test.py
+

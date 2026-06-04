@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Union, Dict
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 import asyncio
 
 from deepeval.models import DeepEvalBaseLLM
@@ -38,11 +38,12 @@ class PromptLeakage(BaseVulnerability):
             Union[str, DeepEvalBaseLLM]
         ] = "gpt-3.5-turbo-0125",
         evaluation_model: Optional[Union[str, DeepEvalBaseLLM]] = "gpt-4o",
-        types: Optional[List[PromptLeakageLiteral]] = [
-            type.value for type in PromptLeakageType
-        ],
+        types: Optional[List[PromptLeakageLiteral]] = None,
         purpose: Optional[str] = None,
     ):
+        if types is None:
+            types = [type.value for type in PromptLeakageType]
+
         enum_types = validate_vulnerability_types(
             self.get_name(), types=types, allowed_type=PromptLeakageType
         )
@@ -83,7 +84,10 @@ class PromptLeakage(BaseVulnerability):
             vulnerability_type = simulated_test_case.vulnerability_type
             input_text = simulated_test_case.input
 
-            target_output = model_callback(input_text)
+            target_response = model_callback(input_text)
+            target_output, retrieval_context, tools_called = (
+                self._normalize_target_response(target_response)
+            )
             red_teaming_test_case = RTTestCase(
                 vulnerability=simulated_test_case.vulnerability,
                 vulnerability_type=vulnerability_type,
@@ -91,6 +95,8 @@ class PromptLeakage(BaseVulnerability):
                 riskCategory=getRiskCategory(vulnerability_type),
                 input=input_text,
                 actual_output=target_output,
+                retrieval_context=retrieval_context,
+                tools_called=tools_called,
             )
 
             metric = self._get_metric(vulnerability_type)
@@ -132,7 +138,10 @@ class PromptLeakage(BaseVulnerability):
             vulnerability_type = simulated_test_case.vulnerability_type
             input_text = simulated_test_case.input
 
-            target_output = await model_callback(input_text)
+            target_response = await model_callback(input_text)
+            target_output, retrieval_context, tools_called = (
+                self._normalize_target_response(target_response)
+            )
 
             red_teaming_test_case = RTTestCase(
                 vulnerability=simulated_test_case.vulnerability,
@@ -141,6 +150,8 @@ class PromptLeakage(BaseVulnerability):
                 riskCategory=getRiskCategory(vulnerability_type),
                 input=input_text,
                 actual_output=target_output,
+                retrieval_context=retrieval_context,
+                tools_called=tools_called,
             )
 
             metric = self._get_metric(vulnerability_type)
@@ -174,42 +185,43 @@ class PromptLeakage(BaseVulnerability):
         purpose: Optional[str] = None,
         attacks_per_vulnerability_type: int = 1,
     ) -> List[RTTestCase]:
+        if attacks_per_vulnerability_type < 1:
+            raise ValueError(
+                "`attacks_per_vulnerability_type` must be greater than 0."
+            )
 
         self.simulator_model, self.using_native_model = initialize_model(
             self.simulator_model
         )
 
-        self.purpose = purpose
+        self.purpose = self._resolve_purpose(purpose)
 
-        templates = dict()
         simulated_test_cases: List[RTTestCase] = []
 
         for type in self.types:
-            templates[type] = templates.get(type, [])
-            templates[type].append(
-                PromptLeakageTemplate.generate_baseline_attacks(
-                    type, attacks_per_vulnerability_type, self.purpose
-                )
+            prompt = PromptLeakageTemplate.generate_baseline_attacks(
+                type, attacks_per_vulnerability_type, self.purpose
             )
 
-        for type in self.types:
-            for prompt in templates[type]:
-                if self.using_native_model:
-                    res, _ = self.simulator_model.generate(
+            if self.using_native_model:
+                res, _ = self.simulator_model.generate(
+                    prompt, schema=SyntheticDataList
+                )
+                local_attacks = res.data
+            else:
+                try:
+                    res: SyntheticDataList = self.simulator_model.generate(
                         prompt, schema=SyntheticDataList
                     )
-                    local_attacks = [item.input for item in res.data]
-                else:
-                    try:
-                        res: SyntheticDataList = self.simulator_model.generate(
-                            prompt, schema=SyntheticDataList
-                        )
-                        local_attacks = [item.input for item in res.data]
-                    except TypeError:
-                        res = self.simulator_model.generate(prompt)
-                        data = trimAndLoadJson(res)
-                        local_attacks = [item["input"] for item in data["data"]]
+                    local_attacks = res.data
+                except TypeError:
+                    res = self.simulator_model.generate(prompt)
+                    data = trimAndLoadJson(res)
+                    local_attacks = data.get("data", [])
 
+            local_attacks = self._normalize_simulated_attacks(
+                local_attacks, attacks_per_vulnerability_type
+            )
             simulated_test_cases.extend(
                 [
                     RTTestCase(
@@ -228,44 +240,45 @@ class PromptLeakage(BaseVulnerability):
         purpose: Optional[str] = None,
         attacks_per_vulnerability_type: int = 1,
     ) -> List[RTTestCase]:
+        if attacks_per_vulnerability_type < 1:
+            raise ValueError(
+                "`attacks_per_vulnerability_type` must be greater than 0."
+            )
 
         self.simulator_model, self.using_native_model = initialize_model(
             self.simulator_model
         )
 
-        self.purpose = purpose
+        self.purpose = self._resolve_purpose(purpose)
 
-        templates = dict()
         simulated_test_cases: List[RTTestCase] = []
 
         for type in self.types:
-            templates[type] = templates.get(type, [])
-            templates[type].append(
-                PromptLeakageTemplate.generate_baseline_attacks(
-                    type, attacks_per_vulnerability_type, self.purpose
-                )
+            prompt = PromptLeakageTemplate.generate_baseline_attacks(
+                type, attacks_per_vulnerability_type, self.purpose
             )
 
-        for type in self.types:
-            for prompt in templates[type]:
-                if self.using_native_model:
-                    res, _ = await self.simulator_model.a_generate(
-                        prompt, schema=SyntheticDataList
-                    )
-                    local_attacks = [item.input for item in res.data]
-                else:
-                    try:
-                        res: SyntheticDataList = (
-                            await self.simulator_model.a_generate(
-                                prompt, schema=SyntheticDataList
-                            )
+            if self.using_native_model:
+                res, _ = await self.simulator_model.a_generate(
+                    prompt, schema=SyntheticDataList
+                )
+                local_attacks = res.data
+            else:
+                try:
+                    res: SyntheticDataList = (
+                        await self.simulator_model.a_generate(
+                            prompt, schema=SyntheticDataList
                         )
-                        local_attacks = [item.input for item in res.data]
-                    except TypeError:
-                        res = await self.simulator_model.a_generate(prompt)
-                        data = trimAndLoadJson(res)
-                        local_attacks = [item["input"] for item in data["data"]]
+                    )
+                    local_attacks = res.data
+                except TypeError:
+                    res = await self.simulator_model.a_generate(prompt)
+                    data = trimAndLoadJson(res)
+                    local_attacks = data.get("data", [])
 
+            local_attacks = self._normalize_simulated_attacks(
+                local_attacks, attacks_per_vulnerability_type
+            )
             simulated_test_cases.extend(
                 [
                     RTTestCase(
@@ -288,6 +301,91 @@ class PromptLeakage(BaseVulnerability):
             model=self.evaluation_model,
             async_mode=self.async_mode,
             verbose_mode=self.verbose_mode,
+        )
+
+    def _resolve_purpose(self, purpose: Optional[str]) -> Optional[str]:
+        return purpose if purpose is not None else self.purpose
+
+    def _normalize_simulated_attacks(
+        self, local_attacks: List[Any], max_attacks: int
+    ) -> List[str]:
+        return [
+            normalized_attack
+            for attack in local_attacks
+            if (normalized_attack := self._extract_attack_input(attack))
+        ][:max_attacks]
+
+    def _extract_attack_input(self, attack: Any) -> Optional[str]:
+        if attack is None:
+            return None
+
+        if isinstance(attack, dict):
+            value = (
+                attack.get("input")
+                or attack.get("prompt")
+                or attack.get("attack")
+                or attack.get("text")
+                or attack.get("query")
+                or attack.get("content")
+            )
+            if value is None:
+                string_values = [
+                    value
+                    for value in attack.values()
+                    if isinstance(value, str) and value.strip()
+                ]
+                if len(string_values) == 1:
+                    value = string_values[0]
+        else:
+            value = getattr(attack, "input", attack)
+
+        if value is None:
+            return None
+
+        normalized = str(value).strip()
+        return normalized or None
+
+    def _normalize_target_response(
+        self, target_response: Any
+    ) -> Tuple[str, Optional[List[str]], Optional[List[Any]]]:
+        if isinstance(target_response, dict):
+            output = (
+                target_response.get("content")
+                or target_response.get("actual_output")
+                or target_response.get("output")
+                or ""
+            )
+            return (
+                str(output),
+                target_response.get("retrieval_context")
+                or target_response.get("retrievalContext"),
+                target_response.get("tools_called")
+                or target_response.get("toolsCalled"),
+            )
+
+        if hasattr(target_response, "content"):
+            return (
+                (
+                    ""
+                    if target_response.content is None
+                    else str(target_response.content)
+                ),
+                getattr(
+                    target_response,
+                    "retrieval_context",
+                    getattr(target_response, "retrievalContext", None),
+                ),
+                getattr(
+                    target_response,
+                    "tools_called",
+                    getattr(target_response, "toolsCalled", None),
+                ),
+            )
+
+        return (
+            "" if target_response is None else str(target_response),
+            None,
+            None,
         )
 
     def is_vulnerable(self) -> bool:
