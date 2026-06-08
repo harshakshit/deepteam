@@ -15,7 +15,7 @@ from deepteam.metrics.prompt_extraction.schema import *
 from deepteam.metrics.prompt_extraction.template import (
     PromptExtractionTemplate,
 )
-from deepteam.utils import format_turns
+from deepteam.utils import format_tools_called, format_turns
 
 
 class PromptExtractionMetric(BaseRedTeamingMetric):
@@ -38,9 +38,10 @@ class PromptExtractionMetric(BaseRedTeamingMetric):
         with metric_progress_indicator(self, _show_indicator=False):
             if self.async_mode:
                 loop = get_or_create_event_loop()
-                loop.run_until_complete(
+                score = loop.run_until_complete(
                     self.a_measure(test_case, _show_indicator=False)
                 )
+                return score
             else:
                 score, reason = self.evaluate(test_case)
                 self.reason = reason
@@ -131,10 +132,15 @@ class PromptExtractionMetric(BaseRedTeamingMetric):
                 + "\n"
             )
 
+        tools_called = self._format_all_tools_called(test_case)
+        retrieval_context = self._collect_all_retrieval_context(test_case)
+
         prompt = PromptExtractionTemplate.generate_evaluation_results(
             input=test_case.input,
             actual_output=actual_output,
             purpose=self.purpose,
+            retrieval_context=retrieval_context,
+            tools_called=tools_called,
         )
         if self.using_native_model:
             res, cost = await self.model.a_generate(
@@ -164,10 +170,15 @@ class PromptExtractionMetric(BaseRedTeamingMetric):
                 + "\n"
             )
 
+        tools_called = self._format_all_tools_called(test_case)
+        retrieval_context = self._collect_all_retrieval_context(test_case)
+
         prompt = PromptExtractionTemplate.generate_evaluation_results(
             input=test_case.input,
             actual_output=actual_output,
             purpose=self.purpose,
+            retrieval_context=retrieval_context,
+            tools_called=tools_called,
         )
         if self.using_native_model:
             res, cost = self.model.generate(prompt=prompt, schema=ReasonScore)
@@ -184,13 +195,35 @@ class PromptExtractionMetric(BaseRedTeamingMetric):
                 data = trimAndLoadJson(res, self)
                 return data["score"], data["reason"]
 
+    def _collect_all_retrieval_context(
+        self, test_case: RTTestCase
+    ) -> Optional[List[str]]:
+        retrieval_context = []
+        if test_case.retrieval_context:
+            retrieval_context.extend(test_case.retrieval_context)
+        if test_case.turns:
+            for turn in test_case.turns:
+                if turn.retrieval_context:
+                    retrieval_context.extend(turn.retrieval_context)
+        return retrieval_context or None
+
+    def _format_all_tools_called(self, test_case: RTTestCase) -> Optional[str]:
+        tools_called = []
+        if test_case.tools_called:
+            tools_called.extend(test_case.tools_called)
+        if test_case.turns:
+            for turn in test_case.turns:
+                if turn.tools_called:
+                    tools_called.extend(turn.tools_called)
+        return format_tools_called(tools_called) if tools_called else None
+
     def is_successful(self) -> bool:
-        if self.error is not None:
+        if getattr(self, "error", None) is not None:
             self.success = False
         else:
             try:
-                self.score == 1
-            except:
+                self.success = self.score == 1
+            except AttributeError:
                 self.success = False
         return self.success
 
