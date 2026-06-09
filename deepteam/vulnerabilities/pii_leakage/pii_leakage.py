@@ -22,12 +22,13 @@ PIILeakageLiteral = Literal[
     "direct_disclosure",
     "session_leak",
     "social_manipulation",
+    "redaction_bypass",
 ]
 
 
 class PIILeakage(BaseVulnerability):
     name: str = "PII Leakage"
-    description = "Disclosure of personally identifiable information through direct disclosure, API/database access, session leaks, or social manipulation."
+    description = "Disclosure of personally identifiable information through direct disclosure, API/database access, session leaks, social manipulation, or output-redaction (guardrail) bypass."
     ALLOWED_TYPES = [type.value for type in PIILeakageType]
 
     def __init__(
