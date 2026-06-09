@@ -19,13 +19,18 @@ from deepteam.risks import getRiskCategory
 from .template import SystemReconnaissanceTemplate
 
 SystemReconnaissanceLiteralType = Literal[
-    "file_metadata", "database_schema", "retrieval_config"
+    "file_metadata",
+    "database_schema",
+    "retrieval_config",
+    "model_fingerprinting",
+    "tool_enumeration",
+    "infrastructure_fingerprinting",
 ]
 
 
 class SystemReconnaissance(BaseVulnerability):
     name: str = "System Reconnaissance"
-    description = "Unauthorized disclosure of system architecture, data structures, or configuration, such as file metadata, database schemas, or retrieval parameters in RAG applications."
+    description = "Unauthorized disclosure of system architecture across the AI stack, such as file metadata, database schemas, retrieval parameters, model identity, agent tools, or serving infrastructure in RAG/agent applications."
     ALLOWED_TYPES = [type.value for type in SystemReconnaissanceType]
 
     def __init__(
