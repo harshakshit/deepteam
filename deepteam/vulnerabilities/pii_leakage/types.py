@@ -7,6 +7,7 @@ class PIILeakageType(Enum):
     DIRECT = "direct_disclosure"
     SESSION_LEAK = "session_leak"
     SOCIAL_MANIPULATION = "social_manipulation"
+    REDACTION_BYPASS = "redaction_bypass"
 
 
 PIILeakageTypes = Literal[
@@ -14,4 +15,5 @@ PIILeakageTypes = Literal[
     PIILeakageType.DIRECT.value,
     PIILeakageType.SESSION_LEAK.value,
     PIILeakageType.SOCIAL_MANIPULATION.value,
+    PIILeakageType.REDACTION_BYPASS.value,
 ]
